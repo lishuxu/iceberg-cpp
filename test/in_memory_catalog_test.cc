@@ -58,7 +58,7 @@ class InMemoryCatalogTest : public ::testing::Test {
   std::string GenerateTestTableLocation(std::string table_name) {
     std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
     const auto info = ::testing::UnitTest::GetInstance()->current_test_info();
-    auto table_location = std::format("{}iceberg_test_{}_{}/{}/", temp_dir.string(),
+    auto table_location = std::format("{}/iceberg_test_{}_{}/{}/", temp_dir.string(),
                                       info->test_suite_name(), info->name(), table_name);
     // generate a unique directory for the table
     std::error_code ec;
