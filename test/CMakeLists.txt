@@ -43,6 +43,14 @@ function(add_iceberg_test test_name)
 
   target_sources(${test_name} PRIVATE ${ARG_SOURCES})
 
+  if(ARG_USE_BUNDLE)
+    target_link_libraries(${test_name} PRIVATE iceberg_bundle_static GTest::gtest_main
+                                               GTest::gmock)
+  else()
+    target_link_libraries(${test_name} PRIVATE iceberg_static GTest::gtest_main
+                                               GTest::gmock)
+  endif()
+
   add_test(NAME ${test_name} COMMAND ${test_name})
 endfunction()
 
@@ -80,7 +88,8 @@ add_iceberg_test(util_test
                  SOURCES
                  formatter_test.cc
                  config_test.cc
-                 visit_type_test.cc)
+                 visit_type_test.cc
+                 string_utils_test.cc)
 
 if(ICEBERG_BUILD_BUNDLE)
   add_iceberg_test(avro_test
@@ -91,6 +100,7 @@ if(ICEBERG_BUILD_BUNDLE)
                    avro_schema_test.cc
                    avro_stream_test.cc
                    manifest_list_reader_test.cc
+                   manifest_reader_test.cc
                    test_common.cc)
 
   add_iceberg_test(arrow_test
