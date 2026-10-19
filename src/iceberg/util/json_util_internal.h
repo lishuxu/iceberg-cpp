@@ -70,9 +70,8 @@ template <typename T>
 Result<T> GetTypedJsonValue(const nlohmann::json& json) {
   try {
     return json.get<T>();
-  } catch (const std::exception& ex) {
-    return JsonParseError("Failed to parse JSON value of type {}: {}", json.type_name(),
-                          ex.what());
+  } catch (const std::exception&) {
+    return JsonParseError("Failed to parse JSON value of type {}", json.type_name());
   }
 }
 
@@ -80,11 +79,10 @@ template <typename T>
 Result<T> GetJsonValueImpl(const nlohmann::json& json, std::string_view key) {
   try {
     return json.at(key).get<T>();
-  } catch (const std::exception& ex) {
+  } catch (const std::exception&) {
     // Report the key and the JSON type found, not the enclosing document.
-    return JsonParseError("Failed to parse '{}' (JSON value of type {}): {}", key,
-                          json.contains(key) ? json.at(key).type_name() : "missing",
-                          ex.what());
+    return JsonParseError("Failed to parse '{}' (JSON value of type {})", key,
+                          json.contains(key) ? json.at(key).type_name() : "missing");
   }
 }
 
@@ -304,9 +302,9 @@ Result<std::unordered_map<std::string, T>> FromJsonMap(
       static_assert(std::is_same_v<T, std::string>, "T must be std::string");
       try {
         return json.get<std::string>();
-      } catch (const std::exception& ex) {
-        return JsonParseError("Cannot parse JSON value of type {} to a string value: {}",
-                              json.type_name(), ex.what());
+      } catch (const std::exception&) {
+        return JsonParseError("Cannot parse JSON value of type {} to a string value",
+                              json.type_name());
       }
     }) {
   std::unordered_map<std::string, T> map{};
