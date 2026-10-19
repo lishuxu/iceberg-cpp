@@ -24,8 +24,7 @@
 #include <format>
 #include <limits>
 #include <optional>
-#include <utility>
-#include <vector>
+#include <string_view>
 
 #include <nlohmann/json.hpp>
 
@@ -60,39 +59,41 @@ inline void SetOptionalStringField(nlohmann::json& json, std::string_view key,
   }
 }
 
-/// \brief Maximum nesting depth of objects and arrays accepted in a JSON
-/// document, matching the default limit of Jackson's StreamReadConstraints.
-///
-/// Documents at this depth are parsed by recursive code. A schema nested close
-/// to the limit fits in an 8 MiB stack, but may not fit in a much smaller one
-/// (e.g. the 512 KiB default for secondary threads on macOS).
-inline constexpr int32_t kMaxJsonNestingDepth = 1000;
+/// \brief Default object/array nesting limit for parsed JSON documents.
+inline constexpr int32_t kMaxJsonNestingDepth = 200;
 
-/// \brief Check that a JSON document does not nest objects and arrays deeper
-/// than max_depth.
-///
-/// The document is walked iteratively, so arbitrarily deep input is handled
-/// without recursion. Callers that hand parsed documents to recursive code
-/// (type, name-mapping and expression parsers) must run this check first.
-inline Status CheckJsonNestingDepth(const nlohmann::json& json,
-                                    int32_t max_depth = kMaxJsonNestingDepth) {
-  std::vector<std::pair<const nlohmann::json*, int32_t>> pending{{&json, 1}};
-  while (!pending.empty()) {
-    auto [node, depth] = pending.back();
-    pending.pop_back();
-    if (!node->is_structured()) {
-      continue;
+/// \brief Parse JSON and stop before constructing containers beyond max_depth.
+inline Result<nlohmann::json> ParseJsonString(std::string_view json_string,
+                                              int32_t max_depth = kMaxJsonNestingDepth) {
+  struct NestingDepthExceeded {};
+  const auto check_depth = [max_depth](int depth, nlohmann::json::parse_event_t event,
+                                       nlohmann::json&) {
+    if ((event == nlohmann::json::parse_event_t::object_start ||
+         event == nlohmann::json::parse_event_t::array_start) &&
+        depth >= max_depth) {
+      // Returning false only discards a value; throw to stop parsing immediately.
+      throw NestingDepthExceeded{};
     }
-    if (depth > max_depth) {
-      return JsonParseError("JSON nesting depth exceeds the maximum of {}", max_depth);
+    return true;
+  };
+
+  try {
+    auto json = nlohmann::json::parse(json_string, check_depth,
+                                      /*allow_exceptions=*/false);
+    if (json.is_discarded()) [[unlikely]] {
+      return JsonParseError("Failed to parse JSON string of {} bytes",
+                            json_string.size());
     }
-    for (const auto& child : *node) {
-      pending.emplace_back(&child, depth + 1);
-    }
+    return json;
+  } catch (const NestingDepthExceeded&) {
+    return JsonParseError("JSON nesting depth exceeds the maximum of {}", max_depth);
   }
-  return {};
 }
 
+/// \brief Dump a JSON document to a string, ignoring encoding errors.
+///
+/// Not intended for error messages: parse errors describe the offending key
+/// and JSON type instead of reproducing JSON values.
 inline std::string SafeDumpJson(const nlohmann::json& json) {
   return json.dump(/*indent=*/-1, /*indent_char=*/' ', /*ensure_ascii=*/false,
                    nlohmann::detail::error_handler_t::ignore);
@@ -102,8 +103,8 @@ template <typename T>
 Result<T> GetTypedJsonValue(const nlohmann::json& json) {
   try {
     return json.get<T>();
-  } catch (const std::exception& ex) {
-    return JsonParseError("Failed to parse {}: {}", SafeDumpJson(json), ex.what());
+  } catch (const std::exception&) {
+    return JsonParseError("Failed to parse JSON value of type {}", json.type_name());
   }
 }
 
@@ -111,9 +112,10 @@ template <typename T>
 Result<T> GetJsonValueImpl(const nlohmann::json& json, std::string_view key) {
   try {
     return json.at(key).get<T>();
-  } catch (const std::exception& ex) {
-    return JsonParseError("Failed to parse '{}' from {}: {}", key, SafeDumpJson(json),
-                          ex.what());
+  } catch (const std::exception&) {
+    // Report the key and the JSON type found, not the enclosing document.
+    return JsonParseError("Failed to parse '{}' (JSON value of type {})", key,
+                          json.contains(key) ? json.at(key).type_name() : "missing");
   }
 }
 
@@ -130,7 +132,7 @@ Result<std::optional<T>> GetJsonValueOptional(const nlohmann::json& json,
 template <typename T>
 Result<T> GetJsonValue(const nlohmann::json& json, std::string_view key) {
   if (!json.contains(key) || json.at(key).is_null()) {
-    return JsonParseError("Missing '{}' in {}", key, SafeDumpJson(json));
+    return JsonParseError("Missing '{}' in JSON object", key);
   }
   return GetJsonValueImpl<T>(json, key);
 }
@@ -159,8 +161,7 @@ Result<Integer> IntegerFromJson(const nlohmann::json& json,
   if (json.is_number_unsigned()) {
     const auto value = json.get<uint64_t>();
     if (value > static_cast<uint64_t>(std::numeric_limits<Integer>::max())) {
-      return JsonParseError("{} integer is out of range: {}", description,
-                            SafeDumpJson(json));
+      return JsonParseError("{} integer is out of range", description);
     }
     return static_cast<Integer>(value);
   }
@@ -168,8 +169,7 @@ Result<Integer> IntegerFromJson(const nlohmann::json& json,
   const auto value = json.get<int64_t>();
   if (value < static_cast<int64_t>(std::numeric_limits<Integer>::min()) ||
       value > static_cast<int64_t>(std::numeric_limits<Integer>::max())) {
-    return JsonParseError("{} integer is out of range: {}", description,
-                          SafeDumpJson(json));
+    return JsonParseError("{} integer is out of range", description);
   }
   return static_cast<Integer>(value);
 }
@@ -261,8 +261,8 @@ Result<std::vector<T>> FromJsonList(
   if (json.contains(key)) {
     ICEBERG_ASSIGN_OR_RAISE(auto list_json, GetJsonValue<nlohmann::json>(json, key));
     if (!list_json.is_array()) {
-      return JsonParseError("Cannot parse '{}' from non-array: {}", key,
-                            SafeDumpJson(list_json));
+      return JsonParseError("Cannot parse '{}' from non-array JSON value of type {}", key,
+                            list_json.type_name());
     }
     for (const auto& entry_json : list_json) {
       ICEBERG_ASSIGN_OR_RAISE(auto entry, from_json(entry_json));
@@ -286,8 +286,8 @@ Result<std::vector<std::shared_ptr<T>>> FromJsonList(
   if (json.contains(key)) {
     ICEBERG_ASSIGN_OR_RAISE(auto list_json, GetJsonValue<nlohmann::json>(json, key));
     if (!list_json.is_array()) {
-      return JsonParseError("Cannot parse '{}' from non-array: {}", key,
-                            SafeDumpJson(list_json));
+      return JsonParseError("Cannot parse '{}' from non-array JSON value of type {}", key,
+                            list_json.type_name());
     }
     for (const auto& entry_json : list_json) {
       ICEBERG_ASSIGN_OR_RAISE(auto entry, from_json(entry_json));
@@ -335,17 +335,17 @@ Result<std::unordered_map<std::string, T>> FromJsonMap(
       static_assert(std::is_same_v<T, std::string>, "T must be std::string");
       try {
         return json.get<std::string>();
-      } catch (const std::exception& ex) {
-        return JsonParseError("Cannot parse {} to a string value: {}", SafeDumpJson(json),
-                              ex.what());
+      } catch (const std::exception&) {
+        return JsonParseError("Cannot parse JSON value of type {} to a string value",
+                              json.type_name());
       }
     }) {
   std::unordered_map<std::string, T> map{};
   if (json.contains(key)) {
     ICEBERG_ASSIGN_OR_RAISE(auto map_json, GetJsonValue<nlohmann::json>(json, key));
     if (!map_json.is_object()) {
-      return JsonParseError("Cannot parse '{}' from non-object: {}", key,
-                            SafeDumpJson(map_json));
+      return JsonParseError("Cannot parse '{}' from non-object JSON value of type {}",
+                            key, map_json.type_name());
     }
     for (const auto& [key, value] : map_json.items()) {
       ICEBERG_ASSIGN_OR_RAISE(auto entry, from_json(value));

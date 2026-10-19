@@ -116,6 +116,8 @@ add_iceberg_test(expression_test
                  residual_evaluator_test.cc
                  strict_metrics_evaluator_test.cc)
 
+add_iceberg_test(encryption_test SOURCES standard_key_metadata_test.cc)
+
 add_iceberg_test(json_serde_test
                  SOURCES
                  json_serde_test.cc
@@ -328,6 +330,7 @@ if(ICEBERG_BUILD_REST)
                         catalog_properties_test.cc
                         error_handlers_test.cc
                         endpoint_test.cc
+                        http_client_test.cc
                         rest_catalog_unit_test.cc
                         rest_file_io_test.cc
                         rest_json_serde_test.cc
