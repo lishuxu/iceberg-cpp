@@ -233,20 +233,37 @@ function(resolve_arrow_dependency)
         "https://archive.apache.org/dist/thrift/0.22.0/thrift-0.22.0.tar.gz")
   endif()
 
-  fetchcontent_declare(VendoredArrow
+  # FetchContent sets arrow_SOURCE_DIR to the tarball root (SOURCE_SUBDIR is cpp)
+  # and on CMake < 3.30 project(arrow) only sets it as a cache variable, so the
+  # normal variable takes precedence and Arrow looks for thirdparty/versions.txt
+  # outside cpp/ (see CMP0180). Patch Arrow to use ARROW_SOURCE_DIR instead.
+  # See https://github.com/apache/iceberg-cpp/issues/1028.
+  # TODO: remove once the upstream Arrow fix is released.
+  set(ARROW_PATCH_COMMAND)
+  find_program(PATCH patch)
+  if(PATCH)
+    set(ARROW_PATCH_COMMAND ${PATCH} -p1 -i)
+  else()
+    find_program(GIT git)
+    if(GIT)
+      set(ARROW_PATCH_COMMAND ${GIT} apply)
+    endif()
+  endif()
+  if(ARROW_PATCH_COMMAND)
+    list(APPEND ARROW_PATCH_COMMAND
+         ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/arrow-thirdparty-dir.patch)
+  endif()
+
+  fetchcontent_declare(Arrow
                        ${FC_DECLARE_COMMON_OPTIONS}
                        URL ${ARROW_SOURCE_URL}
                        URL_HASH "SHA256=${ICEBERG_ARROW_BUILD_SHA256_CHECKSUM}"
-                       SOURCE_SUBDIR
-                       cpp
-                       FIND_PACKAGE_ARGS
-                       NAMES
-                       Arrow
-                       CONFIG)
+                       PATCH_COMMAND ${ARROW_PATCH_COMMAND} SOURCE_SUBDIR cpp
+                                     FIND_PACKAGE_ARGS CONFIG)
 
-  fetchcontent_makeavailable(VendoredArrow)
+  fetchcontent_makeavailable(Arrow)
 
-  if(vendoredarrow_SOURCE_DIR)
+  if(arrow_SOURCE_DIR)
     # Arrow's Parquet targets do not inherit the OpenSSL include directory when
     # Arrow is vendored; add it for the Parquet encryption sources. Depending on the
     # platform and build type, they are compiled in the object library or directly in
@@ -270,16 +287,16 @@ function(resolve_arrow_dependency)
       add_library(Arrow::arrow_static INTERFACE IMPORTED)
       target_link_libraries(Arrow::arrow_static INTERFACE arrow_static)
       target_include_directories(Arrow::arrow_static
-                                 INTERFACE ${vendoredarrow_BINARY_DIR}/src
-                                           ${vendoredarrow_SOURCE_DIR}/cpp/src)
+                                 INTERFACE ${arrow_BINARY_DIR}/src
+                                           ${arrow_SOURCE_DIR}/cpp/src)
     endif()
 
     if(NOT TARGET Parquet::parquet_static)
       add_library(Parquet::parquet_static INTERFACE IMPORTED)
       target_link_libraries(Parquet::parquet_static INTERFACE parquet_static)
       target_include_directories(Parquet::parquet_static
-                                 INTERFACE ${vendoredarrow_BINARY_DIR}/src
-                                           ${vendoredarrow_SOURCE_DIR}/cpp/src)
+                                 INTERFACE ${arrow_BINARY_DIR}/src
+                                           ${arrow_SOURCE_DIR}/cpp/src)
     endif()
 
     set(ARROW_VENDORED TRUE)
@@ -937,6 +954,14 @@ endif()
 
 if(ICEBERG_BUILD_BUNDLE)
   resolve_arrow_dependency()
+  # An installed Arrow does not export its bundled AWS SDK, which the S3 FileIO
+  # uses directly. Use the system SDK, which must match Arrow's.
+  if(ICEBERG_AWSSDK_BUNDLED AND NOT ARROW_VENDORED)
+    message(STATUS "Using the system AWS SDK, since Arrow is provided")
+    set(ICEBERG_AWSSDK_BUNDLED FALSE)
+    set(ICEBERG_AWSSDK_COMPONENTS core)
+    resolve_aws_sdk_dependency()
+  endif()
   resolve_avro_dependency()
   resolve_zstd_dependency()
 endif()

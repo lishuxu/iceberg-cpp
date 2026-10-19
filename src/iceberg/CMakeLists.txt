@@ -33,6 +33,7 @@ set(ICEBERG_SOURCES
     deletes/position_delete_index.cc
     deletes/position_delete_range_consumer.cc
     deletes/roaring_position_bitmap.cc
+    encryption/standard_key_metadata.cc
     expression/aggregate.cc
     expression/binder.cc
     expression/evaluator.cc
@@ -369,6 +370,16 @@ if(ICEBERG_BUILD_BUNDLE)
             ICEBERG_BUNDLE_SHARED_INSTALL_INTERFACE_LIBS)
       list(APPEND ${libs} OpenSSL::Crypto)
     endforeach()
+  endif()
+
+  # The S3 FileIO signs with its own AWS credentials provider.
+  if(ICEBERG_S3)
+    list(APPEND ICEBERG_BUNDLE_STATIC_BUILD_INTERFACE_LIBS aws-cpp-sdk-core)
+    list(APPEND ICEBERG_BUNDLE_SHARED_BUILD_INTERFACE_LIBS aws-cpp-sdk-core)
+    if(NOT ICEBERG_AWSSDK_BUNDLED)
+      list(APPEND ICEBERG_BUNDLE_STATIC_INSTALL_INTERFACE_LIBS aws-cpp-sdk-core)
+      list(APPEND ICEBERG_BUNDLE_SHARED_INSTALL_INTERFACE_LIBS aws-cpp-sdk-core)
+    endif()
   endif()
 
   add_iceberg_lib(iceberg_bundle
