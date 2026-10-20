@@ -144,7 +144,7 @@ std::unordered_set<std::string> ParseClientOnlyProperties(std::string_view value
 
   std::unordered_set<std::string> result;
   for (auto part : std::views::split(value, ',')) {
-    std::string_view key(part.begin(), part.size());
+    std::string_view key(part.begin(), part.end());
     if (auto first = key.find_first_not_of(kWhitespace);
         first != std::string_view::npos) {
       key = key.substr(first, key.find_last_not_of(kWhitespace) - first + 1);
