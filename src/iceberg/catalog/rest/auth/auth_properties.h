@@ -141,7 +141,7 @@ class ICEBERG_REST_EXPORT AuthProperties : public ConfigBase<AuthProperties> {
 ///
 /// \param properties Properties map containing `oauth2-server-uri` and `uri` keys.
 /// \return Resolved OAuth2 server URI.
-Result<std::string> ResolveOAuth2ServerUri(
+ICEBERG_REST_EXPORT Result<std::string> ResolveOAuth2ServerUri(
     const std::unordered_map<std::string, std::string>& properties);
 
 }  // namespace iceberg::rest::auth

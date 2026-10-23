@@ -516,9 +516,13 @@ Result<std::shared_ptr<RestCatalog>> RestCatalog::Make(
   ICEBERG_PRECHECK(client != nullptr, "HTTP client factory returned null");
 
   // Warn if oauth2-server-uri is neither explicitly configured nor protected from
-  // server overrides while using credential auth.
-  if (auto cred_it = final_config.configs().find(auth::AuthProperties::kCredential.key());
-      cred_it != final_config.configs().end() && !cred_it->second.empty()) {
+  // server overrides while a credential or a token is set, matching Java's
+  // OAuth2Manager.warnIfOAuthServerUriNotSet.
+  const auto& final_props = final_config.configs();
+  auto cred_it = final_props.find(auth::AuthProperties::kCredential.key());
+  bool has_credential = cred_it != final_props.end() && !cred_it->second.empty();
+  bool has_token = final_props.contains(auth::AuthProperties::kToken.key());
+  if (has_credential || has_token) {
     auto client_uri_it =
         config.configs().find(auth::AuthProperties::kOAuth2ServerUri.key());
     bool endpoint_explicit =
