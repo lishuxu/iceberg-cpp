@@ -155,6 +155,7 @@ set(ICEBERG_SOURCES
     util/murmurhash3_internal.cc
     util/property_util.cc
     util/retry_util.cc
+    util/scheduled_executor.cc
     util/snapshot_util.cc
     util/string_util.cc
     util/struct_like_set.cc
@@ -325,6 +326,10 @@ if(ICEBERG_BUILD_BUNDLE)
       parquet/parquet_schema_util.cc
       parquet/parquet_writer.cc
       parquet/row_number_reader.cc)
+
+  if(ICEBERG_ENCRYPTION)
+    list(APPEND ICEBERG_BUNDLE_SOURCES encryption/aes_gcm.cc encryption/aes_gcm_stream.cc)
+  endif()
 
   # Libraries to link with exported libiceberg_bundle.{so,a}.
   set(ICEBERG_BUNDLE_STATIC_BUILD_INTERFACE_LIBS)

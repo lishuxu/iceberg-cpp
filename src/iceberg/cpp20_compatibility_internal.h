@@ -216,6 +216,10 @@
 #  include "iceberg/parquet/parquet_writer.h"
 #endif  // ICEBERG_PUBLIC_HEADERS_BUNDLE
 
+#ifdef ICEBERG_PUBLIC_HEADERS_ENCRYPTION
+#  include "iceberg/encryption/aes_gcm_stream.h"
+#endif  // ICEBERG_PUBLIC_HEADERS_ENCRYPTION
+
 #ifdef ICEBERG_PUBLIC_HEADERS_HIVE
 #  include "iceberg/catalog/hive/hive_catalog.h"
 #  include "iceberg/catalog/hive/hive_catalog_properties.h"
@@ -231,7 +235,6 @@
 #  include "iceberg/catalog/rest/auth/auth_properties.h"
 #  include "iceberg/catalog/rest/auth/auth_session.h"
 #  include "iceberg/catalog/rest/auth/oauth2_util.h"
-#  include "iceberg/catalog/rest/auth/token_refresh_scheduler.h"
 #  include "iceberg/catalog/rest/catalog_properties.h"
 #  include "iceberg/catalog/rest/constant.h"
 #  include "iceberg/catalog/rest/endpoint.h"

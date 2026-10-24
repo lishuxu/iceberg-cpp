@@ -31,6 +31,7 @@
 #include <parquet/types.h>
 
 #include "iceberg/metadata_columns.h"
+#include "iceberg/name_mapping.h"
 #include "iceberg/parquet/parquet_schema_util_internal.h"
 #include "iceberg/schema.h"
 #include "iceberg/test/matchers.h"
@@ -202,6 +203,158 @@ TEST(HasFieldIdsTest, GroupNode) {
                                         })));
 }
 // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)
+
+TEST(ParquetNameMappingTest, ApplyNameMapping) {
+  Schema expected_schema({
+      SchemaField::MakeOptional(/*field_id=*/1, "id", int64()),
+      SchemaField::MakeOptional(/*field_id=*/2, "name", string()),
+  });
+
+  auto parquet_schema =
+      MakeGroupNode("iceberg_schema", {MakeInt64Node("id"), MakeStringNode("name")});
+  auto schema_manifest = MakeSchemaManifest(parquet_schema);
+  auto mapping = NameMapping::Make({
+      MappedField{.names = {"id"}, .field_id = 1},
+      MappedField{.names = {"name"}, .field_id = 2},
+  });
+
+  ApplyNameMapping(*mapping, &schema_manifest);
+  EXPECT_EQ(schema_manifest.schema_fields[0].field->metadata()->Get(
+                std::string(kParquetFieldIdKey)),
+            "1");
+  EXPECT_EQ(schema_manifest.schema_fields[1].field->metadata()->Get(
+                std::string(kParquetFieldIdKey)),
+            "2");
+
+  auto projection_result = Project(expected_schema, schema_manifest);
+  ASSERT_THAT(projection_result, IsOk());
+
+  const auto& projection = *projection_result;
+  ASSERT_EQ(projection.fields.size(), 2);
+  ASSERT_PROJECTED_FIELD(projection.fields[0], 0);
+  ASSERT_PROJECTED_FIELD(projection.fields[1], 1);
+  ASSERT_EQ(SelectedColumnIndices(projection), std::vector<int32_t>({0, 1}));
+}
+
+TEST(ParquetNameMappingTest, ApplyNameMappingWithAlias) {
+  Schema expected_schema({
+      SchemaField::MakeOptional(/*field_id=*/2, "full_name", string()),
+  });
+
+  auto parquet_schema = MakeGroupNode("iceberg_schema", {MakeStringNode("user_name")});
+  auto schema_manifest = MakeSchemaManifest(parquet_schema);
+  auto mapping = NameMapping::Make({
+      MappedField{.names = {"full_name", "user_name"}, .field_id = 2},
+  });
+
+  ApplyNameMapping(*mapping, &schema_manifest);
+  auto projection_result = Project(expected_schema, schema_manifest);
+  ASSERT_THAT(projection_result, IsOk());
+
+  const auto& projection = *projection_result;
+  ASSERT_EQ(projection.fields.size(), 1);
+  ASSERT_PROJECTED_FIELD(projection.fields[0], 0);
+}
+
+TEST(ParquetNameMappingTest, ApplyNameMappingToNestedFields) {
+  Schema expected_schema({
+      SchemaField::MakeOptional(
+          /*field_id=*/1, "profile",
+          std::make_shared<StructType>(std::vector<SchemaField>{
+              SchemaField::MakeOptional(/*field_id=*/101, "name", string()),
+          })),
+      SchemaField::MakeOptional(
+          /*field_id=*/2, "numbers",
+          std::make_shared<ListType>(SchemaField::MakeOptional(
+              /*field_id=*/201, "element", int32()))),
+      SchemaField::MakeOptional(
+          /*field_id=*/3, "counts",
+          std::make_shared<MapType>(
+              SchemaField::MakeRequired(/*field_id=*/301, "key", string()),
+              SchemaField::MakeOptional(/*field_id=*/302, "value", int32()))),
+  });
+
+  auto parquet_schema = MakeGroupNode(
+      "iceberg_schema",
+      {
+          MakeGroupNode("profile", {MakeStringNode("name")}),
+          MakeListNode("numbers", MakeInt32Node("item")),
+          MakeMapNode("counts",
+                      MakeStringNode("key", /*field_id=*/-1, /*optional=*/false),
+                      MakeInt32Node("value")),
+      });
+  auto mapping = NameMapping::Make({
+      MappedField{.names = {"profile"},
+                  .field_id = 1,
+                  .nested_mapping = MappedFields::Make({
+                      MappedField{.names = {"name"}, .field_id = 101},
+                  })},
+      MappedField{.names = {"numbers"},
+                  .field_id = 2,
+                  .nested_mapping = MappedFields::Make({
+                      MappedField{.names = {"element"}, .field_id = 201},
+                  })},
+      MappedField{.names = {"counts"},
+                  .field_id = 3,
+                  .nested_mapping = MappedFields::Make({
+                      MappedField{.names = {"key"}, .field_id = 301},
+                      MappedField{.names = {"value"}, .field_id = 302},
+                  })},
+  });
+
+  auto schema_manifest = MakeSchemaManifest(parquet_schema);
+  ApplyNameMapping(*mapping, &schema_manifest);
+  auto projection_result = Project(expected_schema, schema_manifest);
+  ASSERT_THAT(projection_result, IsOk());
+
+  const auto& projection = *projection_result;
+  ASSERT_EQ(projection.fields.size(), 3);
+  ASSERT_PROJECTED_FIELD(projection.fields[0], 0);
+  ASSERT_EQ(projection.fields[0].children.size(), 1);
+  ASSERT_PROJECTED_FIELD(projection.fields[0].children[0], 0);
+  ASSERT_PROJECTED_FIELD(projection.fields[1], 1);
+  ASSERT_EQ(projection.fields[1].children.size(), 1);
+  ASSERT_PROJECTED_FIELD(projection.fields[1].children[0], 0);
+  ASSERT_PROJECTED_FIELD(projection.fields[2], 2);
+  ASSERT_EQ(projection.fields[2].children.size(), 2);
+  ASSERT_PROJECTED_FIELD(projection.fields[2].children[0], 0);
+  ASSERT_PROJECTED_FIELD(projection.fields[2].children[1], 1);
+  ASSERT_EQ(SelectedColumnIndices(projection), std::vector<int32_t>({0, 1, 2, 3}));
+}
+
+TEST(ParquetNameMappingTest, ApplyNameMappingWithUnmappedFields) {
+  Schema expected_schema({
+      SchemaField::MakeOptional(/*field_id=*/1, "id", int64()),
+      SchemaField::MakeOptional(/*field_id=*/2, "extra", string()),
+      SchemaField::MakeOptional(/*field_id=*/3, "unassigned", string()),
+  });
+
+  auto parquet_schema = MakeGroupNode(
+      "iceberg_schema",
+      {MakeInt64Node("id"), MakeStringNode("extra"), MakeStringNode("unassigned")});
+  auto schema_manifest = MakeSchemaManifest(parquet_schema);
+  auto mapping = NameMapping::Make({
+      MappedField{.names = {"id"}, .field_id = 1},
+      MappedField{.names = {"unassigned"}, .field_id = std::nullopt},
+  });
+
+  ApplyNameMapping(*mapping, &schema_manifest);
+  for (size_t i = 1; i < schema_manifest.schema_fields.size(); ++i) {
+    const auto& metadata = schema_manifest.schema_fields[i].field->metadata();
+    EXPECT_TRUE(metadata == nullptr ||
+                metadata->FindKey(std::string(kParquetFieldIdKey)) < 0);
+  }
+
+  auto projection_result = Project(expected_schema, schema_manifest);
+  ASSERT_THAT(projection_result, IsOk());
+
+  const auto& projection = *projection_result;
+  ASSERT_EQ(projection.fields.size(), 3);
+  ASSERT_PROJECTED_FIELD(projection.fields[0], 0);
+  ASSERT_PROJECTED_NULL_FIELD(projection.fields[1]);
+  ASSERT_PROJECTED_NULL_FIELD(projection.fields[2]);
+  ASSERT_EQ(SelectedColumnIndices(projection), std::vector<int32_t>({0}));
+}
 
 TEST(ParquetSchemaProjectionTest, ProjectIdenticalSchemas) {
   Schema expected_schema({
@@ -414,27 +567,133 @@ TEST(ParquetGeospatialSchemaTest, ConvertsGeospatialTypes) {
   }
 }
 
-TEST(ParquetGeospatialSchemaTest, ProjectsTypesWithDifferentParameters) {
+TEST(ParquetGeospatialSchemaTest, ProjectsTypesWithMatchingParameters) {
   Schema expected_schema({
       SchemaField::MakeOptional(/*field_id=*/1, "geom", iceberg::geometry()),
       SchemaField::MakeOptional(
           /*field_id=*/2, "geog",
           iceberg::geography("epsg:4326", EdgeAlgorithm::kKarney)),
+      SchemaField::MakeOptional(/*field_id=*/3, "geog_default", iceberg::geography()),
   });
   auto parquet_schema = MakeGroupNode(
       "iceberg_schema",
-      {MakeBinaryNode("geom", ::parquet::LogicalType::Geometry("EPSG:3857"),
+      {MakeBinaryNode("geom", ::parquet::LogicalType::Geometry(),
                       /*field_id=*/1),
-       MakeBinaryNode("geog",
-                      ::parquet::LogicalType::Geography(
-                          "OGC:CRS84",
-                          ::parquet::LogicalType::EdgeInterpolationAlgorithm::SPHERICAL),
-                      /*field_id=*/2)});
+       MakeBinaryNode(
+           "geog",
+           ::parquet::LogicalType::Geography(
+               "EPSG:4326", ::parquet::LogicalType::EdgeInterpolationAlgorithm::KARNEY),
+           /*field_id=*/2),
+       MakeBinaryNode("geog_default", ::parquet::LogicalType::Geography(),
+                      /*field_id=*/3)});
   auto manifest = MakeSchemaManifest(parquet_schema);
   ICEBERG_UNWRAP_OR_FAIL(auto projection, Project(expected_schema, manifest));
-  ASSERT_EQ(projection.fields.size(), 2);
+  ASSERT_EQ(projection.fields.size(), 3);
   ASSERT_PROJECTED_FIELD(projection.fields[0], 0);
   ASSERT_PROJECTED_FIELD(projection.fields[1], 1);
+  ASSERT_PROJECTED_FIELD(projection.fields[2], 2);
+}
+
+TEST(ParquetGeospatialSchemaTest, ProjectsCaseInsensitiveCrsAndAllAlgorithms) {
+  using ParquetAlgorithm = ::parquet::LogicalType::EdgeInterpolationAlgorithm;
+  const std::array<std::pair<EdgeAlgorithm, ParquetAlgorithm>, 5> algorithms = {{
+      {EdgeAlgorithm::kSpherical, ParquetAlgorithm::SPHERICAL},
+      {EdgeAlgorithm::kVincenty, ParquetAlgorithm::VINCENTY},
+      {EdgeAlgorithm::kThomas, ParquetAlgorithm::THOMAS},
+      {EdgeAlgorithm::kAndoyer, ParquetAlgorithm::ANDOYER},
+      {EdgeAlgorithm::kKarney, ParquetAlgorithm::KARNEY},
+  }};
+  for (const auto& [iceberg_algorithm, parquet_algorithm] : algorithms) {
+    Schema schema({
+        SchemaField::MakeOptional(1, "geom", iceberg::geometry("epsg:3857")),
+        SchemaField::MakeOptional(2, "geog",
+                                  iceberg::geography("ogc:crs84", iceberg_algorithm)),
+    });
+    auto parquet_schema = MakeGroupNode(
+        "iceberg_schema",
+        {MakeBinaryNode("geom", ::parquet::LogicalType::Geometry("EPSG:3857"), 1),
+         MakeBinaryNode("geog",
+                        ::parquet::LogicalType::Geography("OGC:CRS84", parquet_algorithm),
+                        2)});
+    auto manifest = MakeSchemaManifest(parquet_schema);
+    ICEBERG_UNWRAP_OR_FAIL(auto projection, Project(schema, manifest));
+    ASSERT_EQ(projection.fields.size(), 2);
+    ASSERT_PROJECTED_FIELD(projection.fields[0], 0);
+    ASSERT_PROJECTED_FIELD(projection.fields[1], 1);
+  }
+}
+
+TEST(ParquetGeospatialSchemaTest, RejectsMismatchedParameters) {
+  using ParquetAlgorithm = ::parquet::LogicalType::EdgeInterpolationAlgorithm;
+  const std::vector<
+      std::pair<std::shared_ptr<Type>, std::shared_ptr<const ::parquet::LogicalType>>>
+      types = {
+          {iceberg::geometry(), ::parquet::LogicalType::Geometry("EPSG:3857")},
+          {iceberg::geography(), ::parquet::LogicalType::Geography("EPSG:4326")},
+          {iceberg::geography(),
+           ::parquet::LogicalType::Geography("OGC:CRS84", ParquetAlgorithm::KARNEY)},
+          {iceberg::geography("OGC:CRS84", EdgeAlgorithm::kKarney),
+           ::parquet::LogicalType::Geography()},
+      };
+  for (const auto& [expected, actual] : types) {
+    SCOPED_TRACE(expected->ToString() + " from " + actual->ToString());
+    Schema schema({SchemaField::MakeOptional(1, "location", expected)});
+    auto parquet_schema = MakeGroupNode(
+        "iceberg_schema", {MakeBinaryNode("location", actual, /*field_id=*/1)});
+    auto manifest = MakeSchemaManifest(parquet_schema);
+    auto result = Project(schema, manifest);
+    ASSERT_THAT(result, IsError(ErrorKind::kInvalidSchema));
+    ASSERT_THAT(result, HasErrorMessage("Cannot read Parquet type"));
+    ASSERT_THAT(result, HasErrorMessage(expected->ToString()));
+    ASSERT_THAT(result, HasErrorMessage(actual->ToString()));
+    ASSERT_THAT(result, HasErrorMessage("for field location"));
+  }
+}
+
+TEST(ParquetGeospatialSchemaTest, ValidatesNestedParameters) {
+  for (bool matching : {true, false}) {
+    SCOPED_TRACE(matching);
+    const auto actual =
+        ::parquet::LogicalType::Geometry(matching ? "ogc:crs84" : "EPSG:3857");
+    const std::vector<SchemaField> fields = {
+        SchemaField::MakeOptional(
+            1, "struct_field",
+            std::make_shared<StructType>(std::vector<SchemaField>{
+                SchemaField::MakeOptional(3, "geom", iceberg::geometry())})),
+        SchemaField::MakeOptional(4, "list_field",
+                                  std::make_shared<ListType>(SchemaField::MakeOptional(
+                                      5, "element", iceberg::geometry()))),
+        SchemaField::MakeOptional(
+            6, "map_field",
+            std::make_shared<MapType>(
+                SchemaField::MakeRequired(7, "key", iceberg::string()),
+                SchemaField::MakeOptional(8, "value", iceberg::geometry()))),
+    };
+    const std::vector<::parquet::schema::NodePtr> nodes = {
+        MakeGroupNode("struct_field",
+                      {MakeBinaryNode("unselected",
+                                      ::parquet::LogicalType::Geometry("EPSG:3857"), 2),
+                       MakeBinaryNode("geom", actual, 3)},
+                      1),
+        MakeListNode("list_field", MakeBinaryNode("element", actual, 5), 4),
+        MakeMapNode("map_field", MakeStringNode("key", 7, /*optional=*/false),
+                    MakeBinaryNode("value", actual, 8), 6),
+    };
+    const std::array<std::string_view, 3> paths = {
+        "struct_field.geom", "list_field.element.element", "map_field.key_value.value"};
+    for (size_t i = 0; i < fields.size(); ++i) {
+      SCOPED_TRACE(paths[i]);
+      Schema schema({fields[i]});
+      auto manifest = MakeSchemaManifest(MakeGroupNode("iceberg_schema", {nodes[i]}));
+      auto result = Project(schema, manifest);
+      if (matching) {
+        ASSERT_THAT(result, IsOk());
+      } else {
+        ASSERT_THAT(result, IsError(ErrorKind::kInvalidSchema));
+        ASSERT_THAT(result, HasErrorMessage(std::string(paths[i])));
+      }
+    }
+  }
 }
 
 TEST(ParquetGeospatialSchemaTest, RejectsMissingLogicalType) {
