@@ -21,10 +21,6 @@
 
 #include <utility>
 
-#include "iceberg/catalog/rest/auth/auth_manager_internal.h"
-#include "iceberg/catalog/rest/catalog_properties.h"
-#include "iceberg/catalog/rest/rest_util.h"
-
 namespace iceberg::rest::auth {
 
 namespace {
@@ -38,30 +34,6 @@ std::pair<std::string, std::string> ParseCredential(const std::string& credentia
 }
 
 }  // namespace
-
-Result<std::string> ResolveOAuth2ServerUri(
-    const std::unordered_map<std::string, std::string>& properties) {
-  auto endpoint_it = properties.find(AuthProperties::kOAuth2ServerUri.key());
-  const std::string& endpoint = endpoint_it == properties.end()
-                                    ? AuthProperties::kOAuth2ServerUri.value()
-                                    : endpoint_it->second;
-
-  // Match Java HTTPRequest's path checks and string joining, without URIBuilder
-  // validation. Full URL syntax is left to the HTTP transport.
-  ICEBERG_PRECHECK(!endpoint.starts_with('/'),
-                   "OAuth2 token endpoint paths must not start with '/'");
-  std::string full_path;
-  if (endpoint.starts_with("https://") || endpoint.starts_with("http://")) {
-    full_path = endpoint;
-  } else {
-    auto uri_it = properties.find(RestCatalogProperties::kUri.key());
-    ICEBERG_PRECHECK(uri_it != properties.end() && !uri_it->second.empty(),
-                     "Relative OAuth2 token endpoint requires a catalog URI");
-    auto base_uri = TrimTrailingSlash(uri_it->second);
-    full_path = std::string(TrimTrailingSlash(std::string(base_uri) + "/" + endpoint));
-  }
-  return full_path;
-}
 
 std::unordered_map<std::string, std::string> AuthProperties::optional_oauth_params()
     const {

@@ -150,8 +150,6 @@ class OAuth2Manager : public AuthManager {
     ICEBERG_PRECHECK(init_client != nullptr,
                      "OAuth2 initialization HTTP client must not be null");
     ICEBERG_ASSIGN_OR_RAISE(auto config, AuthProperties::FromProperties(properties));
-    ICEBERG_ASSIGN_OR_RAISE(auto endpoint, ResolveOAuth2ServerUri(properties));
-    config.Set(AuthProperties::kOAuth2ServerUri, std::move(endpoint));
     // No token refresh during init (short-lived session).
     config.Set(AuthProperties::kKeepRefreshed, false);
 
@@ -179,8 +177,6 @@ class OAuth2Manager : public AuthManager {
       std::shared_ptr<HttpClient> shared_client,
       const std::unordered_map<std::string, std::string>& properties) override {
     ICEBERG_ASSIGN_OR_RAISE(auto config, AuthProperties::FromProperties(properties));
-    ICEBERG_ASSIGN_OR_RAISE(auto endpoint, ResolveOAuth2ServerUri(properties));
-    config.Set(AuthProperties::kOAuth2ServerUri, std::move(endpoint));
     ICEBERG_PRECHECK(shared_client != nullptr,
                      "OAuth2 catalog session HTTP client must not be null");
     refresh_client_ = std::move(shared_client);

@@ -31,6 +31,7 @@
 #include <nlohmann/json.hpp>
 
 #include "iceberg/catalog.h"
+#include "iceberg/catalog/rest/auth/auth_properties.h"
 #include "iceberg/catalog/rest/auth/auth_session.h"
 #include "iceberg/catalog/rest/catalog_properties.h"
 #include "iceberg/catalog/rest/endpoint.h"
@@ -649,8 +650,8 @@ class RestCatalogOAuth2UriTest : public RestCatalogLoadTableTest {
   }
 
   void CheckContextualRequest(const std::shared_ptr<RestCatalog>& root,
-                              const std::string& endpoint,
-                              const std::string& catalog_uri) {
+                              const std::string& endpoint, const std::string& catalog_uri,
+                              const std::string& credential_type = "credential") {
     EXPECT_CALL(*mock_client_, PostForm(endpoint, _, _, _, _))
         .WillOnce(Return(
             HttpResponse(200, R"({"access_token":"context","token_type":"bearer"})")));
@@ -659,7 +660,7 @@ class RestCatalogOAuth2UriTest : public RestCatalogLoadTableTest {
     ICEBERG_UNWRAP_OR_FAIL(
         auto scoped,
         root->WithContext({.session_id = "context",
-                           .credentials = {{"credential", "user:context-secret"}}}));
+                           .credentials = {{credential_type, "user:context-secret"}}}));
     EXPECT_THAT(scoped->ListNamespaces({}), IsOk());
   }
 
@@ -669,12 +670,12 @@ class RestCatalogOAuth2UriTest : public RestCatalogLoadTableTest {
 };
 
 TEST_F(RestCatalogOAuth2UriTest, TrustsServerOverridesByDefault) {
-  ExpectInit({.overrides = {{"uri", "https://other-catalog.example/base/"},
+  ExpectInit({.overrides = {{"uri", "HTTPS://other-catalog.example/base/"},
                             {"oauth2-server-uri", "oauth/token///"},
                             {"rest.auth.oauth2.trust-server-uri", "false"}}});
   ICEBERG_UNWRAP_OR_FAIL(auto root, MakeOAuth2Catalog());
-  CheckContextualRequest(root, "https://other-catalog.example/base/oauth/token",
-                         "https://other-catalog.example/base");
+  CheckContextualRequest(root, "oauth/token///", "HTTPS://other-catalog.example/base",
+                         auth::AuthProperties::kIdTokenType);
 }
 
 TEST_F(RestCatalogOAuth2UriTest, RequiresAbsoluteClientEndpointBeforeAnyIoWhenUntrusted) {

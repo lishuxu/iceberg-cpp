@@ -34,7 +34,6 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
-#include "iceberg/catalog/rest/auth/auth_manager_internal.h"
 #include "iceberg/catalog/rest/auth/auth_managers.h"
 #include "iceberg/catalog/rest/auth/auth_properties.h"
 #include "iceberg/catalog/rest/auth/auth_session.h"
@@ -75,109 +74,6 @@ class AuthManagerTest : public ::testing::Test {
  protected:
   std::shared_ptr<HttpClient> client_ = std::make_shared<HttpClient>();
 };
-
-TEST(OAuth2UriTest, ResolvesDefaultOAuth2ServerUri) {
-  ICEBERG_UNWRAP_OR_FAIL(
-      auto resolved,
-      ResolveOAuth2ServerUri({
-          {RestCatalogProperties::kUri.key(), "https://catalog.example.com/api/"},
-          {RestCatalogProperties::kPrefix.key(), "warehouse"},
-      }));
-
-  EXPECT_EQ(resolved, "https://catalog.example.com/api/v1/oauth/tokens");
-}
-
-TEST(OAuth2UriTest, ResolvesEmptyOAuth2ServerUriToCatalogUri) {
-  ICEBERG_UNWRAP_OR_FAIL(
-      auto resolved,
-      ResolveOAuth2ServerUri({
-          {RestCatalogProperties::kUri.key(), "https://catalog.example.com"},
-          {AuthProperties::kOAuth2ServerUri.key(), ""},
-      }));
-
-  EXPECT_EQ(resolved, "https://catalog.example.com");
-}
-
-TEST(OAuth2UriTest, ResolvesExplicitRelativeOAuth2ServerUri) {
-  ICEBERG_UNWRAP_OR_FAIL(
-      auto resolved,
-      ResolveOAuth2ServerUri({
-          {RestCatalogProperties::kUri.key(), "https://catalog.example.com/api/"},
-          {AuthProperties::kOAuth2ServerUri.key(), "oauth/token/"},
-      }));
-
-  EXPECT_EQ(resolved, "https://catalog.example.com/api/oauth/token");
-}
-
-TEST(OAuth2UriTest, PreservesExplicitAbsoluteOAuth2ServerUri) {
-  ICEBERG_UNWRAP_OR_FAIL(
-      auto resolved,
-      ResolveOAuth2ServerUri({
-          {RestCatalogProperties::kUri.key(), "https://catalog.example.com"},
-          {AuthProperties::kOAuth2ServerUri.key(), "https://auth.example.com/token/"},
-      }));
-
-  EXPECT_EQ(resolved, "https://auth.example.com/token/");
-}
-
-TEST(OAuth2UriTest, RejectsRelativeOAuth2ServerUriWithoutCatalogUri) {
-  for (const auto& properties :
-       {std::unordered_map<std::string, std::string>{},
-        std::unordered_map<std::string, std::string>{
-            {"oauth2-server-uri", "oauth/token"}},
-        std::unordered_map<std::string, std::string>{
-            {"uri", ""}, {"oauth2-server-uri", "oauth/token"}}}) {
-    EXPECT_THAT(ResolveOAuth2ServerUri(properties), IsError(ErrorKind::kInvalidArgument));
-  }
-}
-
-TEST(OAuth2UriTest, RejectsOAuth2ServerUriWithLeadingSlash) {
-  for (const auto* endpoint : {"/oauth/token", "//auth.example.com/token"}) {
-    for (const auto* uri : {"", "https://catalog.example.com/api/"}) {
-      SCOPED_TRACE(std::string(uri) + " | " + endpoint);
-      EXPECT_THAT(ResolveOAuth2ServerUri({{"uri", uri}, {"oauth2-server-uri", endpoint}}),
-                  IsError(ErrorKind::kInvalidArgument));
-    }
-  }
-}
-
-TEST(OAuth2UriTest, PreservesAbsoluteOAuth2ServerUriWithoutCatalogUri) {
-  ICEBERG_UNWRAP_OR_FAIL(
-      auto resolved,
-      ResolveOAuth2ServerUri({{"oauth2-server-uri", "https://auth.example.com/token/"}}));
-  EXPECT_EQ(resolved, "https://auth.example.com/token/");
-}
-
-TEST(OAuth2UriTest, ReusesResolvedEndpointInSessions) {
-  struct TestCase {
-    const char* uri;
-    const char* endpoint;
-    const char* expected;
-  };
-  // These resolved URLs must not be treated as relative paths a second time.
-  for (const auto& [uri, endpoint, expected] : {
-           TestCase{"HTTPS://catalog.example/api", "v1/oauth/tokens",
-                    "HTTPS://catalog.example/api/v1/oauth/tokens"},
-           TestCase{"https://catalog.example/api", "HTTPS://auth.example/token",
-                    "https://catalog.example/api/HTTPS://auth.example/token"},
-       }) {
-    SCOPED_TRACE(std::string(uri) + " | " + endpoint);
-    const std::unordered_map<std::string, std::string> properties = {
-        {"uri", uri},
-        {"oauth2-server-uri", endpoint},
-        {"token", "parent"},
-        {"token-refresh-enabled", "false"}};
-    auto client = std::make_shared<HttpClient>();
-    ICEBERG_UNWRAP_OR_FAIL(auto manager, AuthManagers::Load("test", properties));
-    ICEBERG_UNWRAP_OR_FAIL(auto parent, manager->CatalogSession(client, properties));
-    EXPECT_EQ(parent->OAuth2Info()->oauth2_server_uri, expected);
-    ICEBERG_UNWRAP_OR_FAIL(
-        auto child,
-        manager->ContextualSession(
-            {.session_id = "child", .credentials = {{"token", "child"}}}, parent));
-    EXPECT_EQ(child->OAuth2Info()->oauth2_server_uri, expected);
-  }
-}
 
 // Verifies loading NoopAuthManager with explicit "none" auth type
 TEST_F(AuthManagerTest, LoadNoopAuthManagerExplicit) {
