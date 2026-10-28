@@ -465,6 +465,18 @@ Result<std::shared_ptr<RestCatalog>> RestCatalog::Make(
   }
   ICEBERG_ASSIGN_OR_RAISE(auto uri, config.Uri());
 
+  const bool trust_server_oauth2_uri =
+      config.Get(RestCatalogProperties::kTrustServerOAuth2Uri);
+  const auto endpoint =
+      config.configs().find(auth::AuthProperties::kOAuth2ServerUri.key());
+  if (!trust_server_oauth2_uri) {
+    ICEBERG_PRECHECK(
+        endpoint != config.configs().end() && (endpoint->second.starts_with("https://") ||
+                                               endpoint->second.starts_with("http://")),
+        "An explicit absolute http:// or https:// oauth2-server-uri is required when "
+        "rest.auth.oauth2.trust-server-uri is false");
+  }
+
   std::string catalog_name = config.Get(RestCatalogProperties::kName);
   ICEBERG_ASSIGN_OR_RAISE(auto auth_manager,
                           auth::AuthManagers::Load(catalog_name, config.configs()));
@@ -483,10 +495,14 @@ Result<std::shared_ptr<RestCatalog>> RestCatalog::Make(
   ICEBERG_ASSIGN_OR_RAISE(auto server_config,
                           FetchServerConfig(*init_client, *paths, config, *init_session));
 
-  ICEBERG_ASSIGN_OR_RAISE(auto merged_config,
-                          MergeServerConfig(server_config.defaults,
-                                            server_config.overrides, config.configs()));
-  RestCatalogProperties final_config = RestCatalogProperties::FromMap(merged_config);
+  RestCatalogProperties final_config = RestCatalogProperties::FromMap(
+      MergeConfigs(server_config.defaults, config.configs(), server_config.overrides));
+  // The server cannot change the client's endpoint trust policy or, when disabled,
+  // move the OAuth endpoint directly or through an override of the catalog URI.
+  final_config.Set(RestCatalogProperties::kTrustServerOAuth2Uri, trust_server_oauth2_uri);
+  if (!trust_server_oauth2_uri) {
+    final_config.mutable_configs().insert_or_assign(endpoint->first, endpoint->second);
+  }
 
   std::unordered_set<Endpoint> endpoints;
   if (!server_config.endpoints.empty()) {
@@ -515,34 +531,6 @@ Result<std::shared_ptr<RestCatalog>> RestCatalog::Make(
 
   ICEBERG_ASSIGN_OR_RAISE(auto client, client_factory(final_config));
   ICEBERG_PRECHECK(client != nullptr, "HTTP client factory returned null");
-
-  // Warn if oauth2-server-uri is neither explicitly configured nor protected from
-  // server overrides while a credential or a token is set, matching Java's
-  // OAuth2Manager.warnIfOAuthServerUriNotSet.
-  const auto& final_props = final_config.configs();
-  auto cred_it = final_props.find(auth::AuthProperties::kCredential.key());
-  bool has_credential = cred_it != final_props.end() && !cred_it->second.empty();
-  bool has_token = final_props.contains(auth::AuthProperties::kToken.key());
-  if (has_credential || has_token) {
-    auto client_uri_it =
-        config.configs().find(auth::AuthProperties::kOAuth2ServerUri.key());
-    bool endpoint_explicit =
-        client_uri_it != config.configs().end() && !client_uri_it->second.empty() &&
-        client_uri_it->second != auth::AuthProperties::kOAuth2ServerUri.value();
-    bool endpoint_protected =
-        ParseClientOnlyProperties(
-            config.Get(RestCatalogProperties::kClientOnlyProperties))
-            .contains(auth::AuthProperties::kOAuth2ServerUri.key());
-    if (!endpoint_explicit && !endpoint_protected) {
-      ICEBERG_LOG_WARN(
-          "OAuth2 server URI not explicitly configured; token endpoint will be derived "
-          "from catalog URI and may be affected by server overrides. Set '{}' explicitly "
-          "or add it to '{}' for stronger isolation.",
-          auth::AuthProperties::kOAuth2ServerUri.key(),
-          RestCatalogProperties::kClientOnlyProperties.key());
-    }
-  }
-
   ICEBERG_ASSIGN_OR_RAISE(auto catalog_session,
                           auth_manager->CatalogSession(client, final_config.configs()));
 

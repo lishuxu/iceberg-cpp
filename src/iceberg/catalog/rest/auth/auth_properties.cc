@@ -21,6 +21,7 @@
 
 #include <utility>
 
+#include "iceberg/catalog/rest/auth/auth_manager_internal.h"
 #include "iceberg/catalog/rest/catalog_properties.h"
 #include "iceberg/catalog/rest/rest_util.h"
 
@@ -41,26 +42,25 @@ std::pair<std::string, std::string> ParseCredential(const std::string& credentia
 Result<std::string> ResolveOAuth2ServerUri(
     const std::unordered_map<std::string, std::string>& properties) {
   auto endpoint_it = properties.find(AuthProperties::kOAuth2ServerUri.key());
-  std::string endpoint = endpoint_it == properties.end()
-                             ? AuthProperties::kOAuth2ServerUri.value()
-                             : endpoint_it->second;
+  const std::string& endpoint = endpoint_it == properties.end()
+                                    ? AuthProperties::kOAuth2ServerUri.value()
+                                    : endpoint_it->second;
 
-  if (endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
-    return endpoint;
+  // Match Java HTTPRequest's path checks and string joining, without URIBuilder
+  // validation. Full URL syntax is left to the HTTP transport.
+  ICEBERG_PRECHECK(!endpoint.starts_with('/'),
+                   "OAuth2 token endpoint paths must not start with '/'");
+  std::string full_path;
+  if (endpoint.starts_with("https://") || endpoint.starts_with("http://")) {
+    full_path = endpoint;
+  } else {
+    auto uri_it = properties.find(RestCatalogProperties::kUri.key());
+    ICEBERG_PRECHECK(uri_it != properties.end() && !uri_it->second.empty(),
+                     "Relative OAuth2 token endpoint requires a catalog URI");
+    auto base_uri = TrimTrailingSlash(uri_it->second);
+    full_path = std::string(TrimTrailingSlash(std::string(base_uri) + "/" + endpoint));
   }
-  if (endpoint.empty()) {
-    return endpoint;
-  }
-  auto uri_it = properties.find(RestCatalogProperties::kUri.key());
-  if (uri_it == properties.end() || uri_it->second.empty()) {
-    return endpoint;
-  }
-
-  auto base_uri = std::string(TrimTrailingSlash(uri_it->second));
-  if (endpoint.starts_with('/')) {
-    return base_uri + endpoint;
-  }
-  return base_uri + "/" + endpoint;
+  return full_path;
 }
 
 std::unordered_map<std::string, std::string> AuthProperties::optional_oauth_params()
@@ -86,9 +86,6 @@ Result<AuthProperties> AuthProperties::FromProperties(
     config.client_id_ = std::move(id);
     config.client_secret_ = std::move(secret);
   }
-
-  ICEBERG_ASSIGN_OR_RAISE(auto oauth2_server_uri, ResolveOAuth2ServerUri(properties));
-  config.Set(kOAuth2ServerUri, std::move(oauth2_server_uri));
 
   // TODO(lishuxu): Parse JWT exp claim from token to set expires_at_millis_.
 

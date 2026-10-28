@@ -32,6 +32,10 @@
 
 namespace iceberg::rest::auth {
 
+/// \brief Resolve an OAuth2 token endpoint.
+Result<std::string> ResolveOAuth2ServerUri(
+    const std::unordered_map<std::string, std::string>& properties);
+
 /// \brief Create a no-op authentication manager (no authentication).
 Result<std::unique_ptr<AuthManager>> MakeNoopAuthManager(
     std::string_view name,

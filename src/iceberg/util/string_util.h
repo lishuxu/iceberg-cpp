@@ -196,9 +196,7 @@ class ICEBERG_EXPORT StringUtils {
   // knows.
   static std::optional<bool> AsciiEqualsIgnoreCase(std::string_view a,
                                                    std::string_view b) {
-    // Parenthesized so a Windows min() macro (e.g. from <windows.h> via cpr) does
-    // not expand here.
-    const size_t n = (std::min)(a.size(), b.size());
+    const size_t n = std::min(a.size(), b.size());
     for (size_t i = 0; i < n; ++i) {
       if (!IsAsciiByte(a[i]) || !IsAsciiByte(b[i])) {
         return std::nullopt;
